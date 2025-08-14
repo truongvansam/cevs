@@ -7,7 +7,7 @@ import datetime
 def scan_target(target):
     print(f"[+] Đang quét {target}...")
     result = subprocess.run(
-        ["nmap", "-sV", "--script", "vuln", target],
+        ["nmap", "-sV", "--script", "vulners", target],
         capture_output=True,
         text=True
     )
