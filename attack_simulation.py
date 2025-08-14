@@ -1,137 +1,60 @@
 #!/usr/bin/env python3
-"""
-attack_simulation.py
-- Quét mạng lab với Nmap + NSE vuln
-- Tìm dịch vụ có lỗ hổng (searchsploit)
-- Mô phỏng khai thác (ghi log)
-- Xuất báo cáo HTML
+import subprocess
+import sys
+import os
+import datetime
 
-Chạy:
-  python3 attack_simulation.py targets.txt report_dir
-"""
+def scan_target(target):
+    print(f"[+] Đang quét {target}...")
+    result = subprocess.run(
+        ["nmap", "-sV", "--script", "vuln", target],
+        capture_output=True,
+        text=True
+    )
+    return result.stdout
 
-import sys, os, subprocess, json, datetime
-import nmap
-import pandas as pd
-from jinja2 import Template
-from pathlib import Path
-import shutil
+def simulate_exploit(scan_output):
+    exploited = []
+    for line in scan_output.splitlines():
+        if "VULNERABLE" in line.upper():
+            exploited.append(line.strip())
+    return exploited
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Attack Simulation Report</title>
-<style>
-body { font-family: Arial; margin: 20px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #ccc; padding: 8px; }
-th { background: #eee; }
-.simulated { background: #d1ffd1; }
-</style>
-</head>
-<body>
-<h1>Attack Simulation Report</h1>
-<p>Generated: {{ now }}</p>
-<table>
-<tr><th>Host</th><th>Port</th><th>Service</th><th>Version</th><th>Searchsploit Result</th><th>Status</th></tr>
-{% for row in rows %}
-<tr class="{{ 'simulated' if row.status == 'Exploited (Simulated)' else '' }}">
-<td>{{ row.host }}</td>
-<td>{{ row.port }}</td>
-<td>{{ row.service }}</td>
-<td>{{ row.version }}</td>
-<td><pre>{{ row.searchsploit }}</pre></td>
-<td>{{ row.status }}</td>
-</tr>
-{% endfor %}
-</table>
-</body>
-</html>
-"""
-
-def read_targets(file):
-    with open(file) as f:
-        return [line.strip() for line in f if line.strip()]
-
-def nmap_scan(host):
-    nm = nmap.PortScanner()
-    args = "-sV -Pn --script vuln --version-light"
-    return nm.scan(hosts=host, arguments=args)
-
-def parse_scan(result, host):
-    rows = []
-    host_data = result.get('scan', {}).get(host, {})
-    for proto in ('tcp', 'udp'):
-        for port, info in host_data.get(proto, {}).items():
-            rows.append({
-                'host': host,
-                'port': port,
-                'service': info.get('name'),
-                'version': f"{info.get('product','')} {info.get('version','')}".strip()
-            })
-    return rows
-
-def searchsploit_lookup(query):
-    if not shutil.which("searchsploit"):
-        return ""
-    try:
-        out = subprocess.run(
-            ["searchsploit", query],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10
-        ).stdout.decode(errors='ignore')
-        return "\n".join(out.splitlines()[:5])  # lấy 5 dòng đầu
-    except:
-        return ""
-
-def simulate_attack(service, version):
-    # Giả lập: ghi log, không gửi payload thật
-    print(f"[SIMULATION] Exploiting {service} {version} ... success")
-    return "Exploited (Simulated)"
+def save_report(target, scan_output, exploited, report_dir):
+    os.makedirs(report_dir, exist_ok=True)
+    filename = os.path.join(report_dir, f"{target.replace('.', '_')}.txt")
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"=== Báo cáo quét {target} ===\n")
+        f.write(f"Thời gian: {datetime.datetime.now()}\n\n")
+        f.write("----- Kết quả quét -----\n")
+        f.write(scan_output)
+        f.write("\n----- Khai thác giả lập -----\n")
+        if exploited:
+            for vuln in exploited:
+                f.write(f"[*] Mô phỏng exploit: {vuln}\n")
+        else:
+            f.write("Không phát hiện lỗ hổng nghiêm trọng.\n")
+    print(f"[+] Đã lưu báo cáo: {filename}")
 
 def main():
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} targets.txt report_dir")
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <file_targets.txt> <report_dir>")
         sys.exit(1)
 
-    targets_file = sys.argv[1]
-    report_dir = Path(sys.argv[2])
-    report_dir.mkdir(parents=True, exist_ok=True)
+    target_file = sys.argv[1]
+    report_dir = sys.argv[2]
 
-    targets = read_targets(targets_file)
-    all_rows = []
+    if not os.path.isfile(target_file):
+        print(f"[!] Không tìm thấy file {target_file}")
+        sys.exit(1)
 
-    for host in targets:
-        print(f"[+] Scanning {host} ...")
-        scan_result = nmap_scan(host)
-        services = parse_scan(scan_result, host)
+    with open(target_file, "r") as f:
+        targets = [line.strip() for line in f if line.strip()]
 
-        for svc in services:
-            query = f"{svc['service']} {svc['version']}".strip()
-            ss_result = searchsploit_lookup(query)
-            status = "Not Exploited"
-            if ss_result:
-                status = simulate_attack(svc['service'], svc['version'])
-            all_rows.append({
-                'host': svc['host'],
-                'port': svc['port'],
-                'service': svc['service'],
-                'version': svc['version'],
-                'searchsploit': ss_result,
-                'status': status
-            })
-
-    # Xuất CSV
-    csv_path = report_dir / "attack_report.csv"
-    pd.DataFrame(all_rows).to_csv(csv_path, index=False)
-
-    # Xuất HTML
-    html_path = report_dir / "attack_report.html"
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(Template(HTML_TEMPLATE).render(rows=all_rows, now=datetime.datetime.now()))
-
-    print(f"[+] Reports saved: {csv_path}, {html_path}")
+    for target in targets:
+        scan_output = scan_target(target)
+        exploited = simulate_exploit(scan_output)
+        save_report(target, scan_output, exploited, report_dir)
 
 if __name__ == "__main__":
     main()
