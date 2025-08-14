@@ -6,7 +6,7 @@ import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---------------- CONFIG ----------------
-TARGET = "192.168.1.10"   # IP hoặc hostname trong lab
+TARGET = "113.161.143.5"   # IP hoặc hostname trong lab
 MAX_RESULTS = 2           # Số repo tối đa clone mỗi CVE/dịch vụ
 SAVE_DIR = "exploits"     # Thư mục lưu repo
 FILENAME_KEYWORDS = ["exploit", "poc", "proof"]
