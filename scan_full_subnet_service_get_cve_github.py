@@ -2,7 +2,7 @@
 import subprocess
 import re
 import requests
-import pandas as pd
+import csv
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import os
@@ -13,13 +13,13 @@ THREADS = 5
 GITHUB_SEARCH_LIMIT = 3
 CVSS_THRESHOLD = 7.0
 OUTPUT_FILE = f"result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-TOP_PORTS = True  # True: top 1000, False: full port
+TOP_PORTS = True  # True: top 1000 ports, False: full scan
 
-# ===== CẬP NHẬT NMAP SCRIPTS =====
+# ===== NMAP SCRIPTS UPDATE =====
 def update_nmap_scripts():
-    print("[*] Cập nhật Nmap & scripts...")
+    print("[*] Cập nhật Nmap scripts...")
     subprocess.run(["sudo", "apt", "update", "-y"])
-    subprocess.run(["sudo", "apt", "install", "-y", "nmap"])
+    subprocess.run(["sudo", "apt", "install", "-y", "nmap", "git", "wget"])
     vulners_path = "/usr/share/nmap/scripts/vulners.nse"
     vulscan_dir = "/usr/share/nmap/scripts/vulscan"
 
@@ -30,21 +30,18 @@ def update_nmap_scripts():
     subprocess.run(["sudo", "git", "clone", "https://github.com/scipag/vulscan.git", vulscan_dir])
     print("[+] Hoàn tất cập nhật scripts.")
 
-# ===== TÌM HOST SỐNG =====
-def discover_hosts(target):
-    if "/" in target:
-        print(f"[*] Dò host sống trong subnet {target}...")
-        try:
-            result = subprocess.run(["nmap", "-sn", target], capture_output=True, text=True, timeout=120)
-            hosts = re.findall(r"Nmap scan report for ([\d\.]+)", result.stdout)
-            return hosts
-        except Exception as e:
-            print(f"[!] Lỗi dò subnet {target}: {e}")
-            return []
-    else:
-        return [target]
+# ===== DÒ HOST SỐNG =====
+def discover_hosts(subnet):
+    print(f"[*] Dò host sống trong subnet {subnet}...")
+    try:
+        result = subprocess.run(["nmap", "-sn", subnet], capture_output=True, text=True, timeout=120)
+        hosts = re.findall(r"Nmap scan report for ([\d\.]+)", result.stdout)
+        return hosts
+    except Exception as e:
+        print(f"[!] Lỗi dò subnet {subnet}: {e}")
+        return []
 
-# ===== KIỂM TRA DỊCH VỤ =====
+# ===== DỊCH VỤ → PORT =====
 SERVICE_PORTS = {
     "http": "80,443,8080",
     "ssh": "22",
@@ -113,36 +110,39 @@ if __name__ == "__main__":
 
     update_nmap_scripts()
 
-    print("Chọn chế độ quét:")
-    print("1 - Quét theo danh sách target")
-    print("2 - Quét theo subnet")
-    print("3 - Quét theo dịch vụ")
-    choice = input("Nhập lựa chọn (1/2/3): ").strip()
+    service_filter = input("Nhập tên dịch vụ cần quét (http, ssh, mysql...) hoặc để trống quét tất cả: ").strip()
 
-    service_filter = None
-    if choice == "3":
-        service_filter = input("Nhập tên dịch vụ (http, ssh, mysql...): ").strip()
-
+    # Đọc file targets
     with open(TARGET_FILE) as f:
         raw_targets = [line.strip() for line in f if line.strip()]
 
     all_hosts = []
     for t in raw_targets:
-        hosts = discover_hosts(t)
-        all_hosts.extend(hosts)
+        if "/" in t:
+            hosts = discover_hosts(t)
+            all_hosts.extend(hosts)
+        else:
+            all_hosts.append(t)
 
-    print(f"[+] Tổng host cần quét: {len(all_hosts)}")
+    print(f"[+] Tổng số host cần quét: {len(all_hosts)}")
+
     all_results = []
+    from functools import partial
+    scan_func = partial(scan_target, service_filter=service_filter if service_filter else None)
 
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        for res in executor.map(lambda h: scan_target(h, service_filter), all_hosts):
+        for res in executor.map(scan_func, all_hosts):
             if res:
                 all_results.extend(res)
 
+    # Ghi CSV thuần
     if all_results:
-        df = pd.DataFrame(all_results)
-        df.sort_values(by="CVSS", ascending=False, inplace=True)
-        df.to_csv(OUTPUT_FILE, index=False)
+        with open(OUTPUT_FILE, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["Target", "CVE", "CVSS", "GitHub_PoC"])
+            writer.writeheader()
+            # Sắp xếp theo CVSS giảm dần
+            for row in sorted(all_results, key=lambda x: x["CVSS"], reverse=True):
+                writer.writerow(row)
         print(f"[+] Kết quả lưu tại: {OUTPUT_FILE}")
     else:
         print("[!] Không tìm thấy CVE nguy hiểm.")
